@@ -10,8 +10,39 @@
     <meta property="og:description" content="Khám phá hàng ngàn template AI chuyên nghiệp cho video, hình ảnh, content và more." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <script type="module" crossorigin src="/assets/index-Cflxe31B.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BuNnLg8L.css">
+    <script>
+      (function() {
+        try {
+          var ua = navigator.userAgent || navigator.vendor || window.opera || '';
+          var isIOS = /iPhone|iPad|iPod/i.test(ua);
+          var isAndroid = /Android/i.test(ua);
+          var isZalo = /Zalo/i.test(ua);
+          var isMessenger = /Messenger/i.test(ua);
+          var isFB = /FBAN|FBAV|FB_IAB|FBSS/i.test(ua) && !isMessenger;
+          var isInstagram = /Instagram/i.test(ua);
+          var isLine = /Line/i.test(ua);
+          var isTikTok = /musical_ly|ByteLocale|TikTok/i.test(ua);
+          var isWKWebView = isIOS && !/Safari/i.test(ua) && /WebKit/i.test(ua);
+
+          var isInApp = isZalo || isMessenger || isFB || isInstagram || isLine || isTikTok || isWKWebView;
+
+          if (isInApp) {
+            window.__IS_IN_APP__ = true;
+            window.__IN_APP_NAME__ = isZalo ? 'Zalo' : isMessenger ? 'Messenger' : isFB ? 'Facebook' : isInstagram ? 'Instagram' : 'ứng dụng';
+
+            // Auto-redirect on Android to Chrome
+            if (isAndroid) {
+              var cleanUrl = window.location.href.replace(/^https?:\/\//i, '');
+              window.location.replace('intent://' + cleanUrl + '#Intent;scheme=https;package=com.android.chrome;end');
+            }
+          }
+        } catch (e) {
+          console.warn('In-app browser check failed', e);
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-BiObfNF_.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DwGKyV9D.css">
   </head>
   <body>
     <div id="root"></div>
