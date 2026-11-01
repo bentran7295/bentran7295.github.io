@@ -1,0 +1,174 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title></title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        font-family: monospace;
+      }
+    </style>
+  </head>
+  <body><script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js';
+    import { getFirestore, collection, query, where, getDocs, doc, getDoc } from 'https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js';
+
+    const firebaseConfig = {
+      projectId: "gen-lang-client-0306317149",
+      appId: "1:520819513520:web:dd46f7a23ac2f95411c375",
+      apiKey: "AIzaSyDke57AWOc8m1p8hvIXaicgTYqqTsBGO-A",
+      authDomain: "gen-lang-client-0306317149.firebaseapp.com",
+      firestoreDatabaseId: "ai-studio-fastaitemplatehu-c8f56d8b-934b-4553-aa2c-437b59532ee5"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+    function parseExpiry(val) {
+      if (!val) return null;
+      if (typeof val === 'string') {
+        const clean = val.trim();
+        const compact = clean.match(/^(\d{4})(\d{2})(\d{2})$/);
+        if (compact) {
+          const d = new Date(Date.UTC(Number(compact[1]), Number(compact[2]) - 1, Number(compact[3]), 23, 59, 59));
+          return { timestamp: d.getTime(), yyyyMMdd: compact[1] + compact[2] + compact[3] };
+        }
+        const iso = clean.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+        if (iso) {
+          const yyyy = iso[1];
+          const mm = iso[2].padStart(2, '0');
+          const dd = iso[3].padStart(2, '0');
+          const d = new Date(Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd), 23, 59, 59));
+          return { timestamp: d.getTime(), yyyyMMdd: yyyy + mm + dd };
+        }
+      }
+
+      let millis = null;
+      if (typeof val === 'object' && val !== null) {
+        if (typeof val.toDate === 'function') {
+          millis = val.toDate().getTime();
+        } else if (typeof val.seconds === 'number') {
+          millis = val.seconds * 1000;
+        }
+      } else if (typeof val === 'number') {
+        millis = val < 10000000000 ? val * 1000 : val;
+      }
+
+      if (millis !== null && !isNaN(millis)) {
+        const date = new Date(millis);
+        const yyyy = date.getUTCFullYear().toString();
+        const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(date.getUTCDate()).padStart(2, '0');
+        return { timestamp: millis, yyyyMMdd: yyyy + mm + dd };
+      }
+      return null;
+    }
+
+    async function checkLicense() {
+      const params = new URLSearchParams(window.location.search);
+      const pid = (params.get('pid') || params.get('projectId') || params.get('projectID') || '').trim();
+      const ma = (params.get('ma') || params.get('maMay') || params.get('machineId') || params.get('machine') || '').trim();
+
+      if (!pid || !ma) {
+        document.body.innerText = '';
+        return;
+      }
+
+      const targetProjectIds = new Set();
+      targetProjectIds.add(pid);
+
+      try {
+        const pDoc = await getDoc(doc(db, 'projects', pid));
+        if (pDoc.exists()) {
+          targetProjectIds.add(pDoc.id);
+        }
+      } catch (e) {}
+
+      try {
+        const qSlug = query(collection(db, 'projects'), where('slug', '==', pid));
+        const sSnap = await getDocs(qSlug);
+        sSnap.forEach(d => targetProjectIds.add(d.id));
+      } catch (e) {}
+
+      const expiries = [];
+
+      for (const projId of Array.from(targetProjectIds)) {
+        // Master licenses
+        try {
+          const qMachine = query(collection(db, `projects/${projId}/licenses`), where('machineId', '==', ma));
+          const snapMachine = await getDocs(qMachine);
+          snapMachine.forEach(d => {
+            const data = d.data();
+            const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
+            if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
+          });
+
+          const qDevice = query(collection(db, `projects/${projId}/licenses`), where('deviceId', '==', ma));
+          const snapDevice = await getDocs(qDevice);
+          snapDevice.forEach(d => {
+            const data = d.data();
+            const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
+            if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
+          });
+
+          if (snapMachine.empty && snapDevice.empty) {
+            const snapAll = await getDocs(collection(db, `projects/${projId}/licenses`));
+            snapAll.forEach(d => {
+              const data = d.data();
+              const docMachine = (data.machineId || data.deviceId || '').trim().toLowerCase();
+              if (docMachine === ma.toLowerCase()) {
+                const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
+                if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
+              }
+            });
+          }
+        } catch (e) {}
+
+        // Device licenses
+        try {
+          const snapDeviceLic = await getDocs(collection(db, `machines/${ma}/projects/${projId}/licenses`));
+          snapDeviceLic.forEach(d => {
+            const data = d.data();
+            const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
+            if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
+          });
+        } catch (e) {}
+
+        // Legacy licenses
+        try {
+          const qLegacy = query(collection(db, 'licenses'), where('projectId', '==', projId));
+          const snapLegacy = await getDocs(qLegacy);
+          snapLegacy.forEach(d => {
+            const data = d.data();
+            const docMachine = (data.machineId || data.deviceId || '').trim().toLowerCase();
+            if (docMachine === ma.toLowerCase()) {
+              const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
+              if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
+            }
+          });
+        } catch (e) {}
+      }
+
+      if (expiries.length === 0) {
+        document.body.innerText = '';
+        return;
+      }
+
+      const active = expiries.filter(f => !f.isRevoked);
+      const candidates = active.length > 0 ? active : expiries;
+      candidates.sort((a, b) => b.timestamp - a.timestamp);
+
+      const maxDate = candidates[0].yyyyMMdd;
+      document.title = maxDate;
+      // Output only yyyyMMdd without any other elements
+      document.body.innerText = maxDate;
+    }
+
+    checkLicense().catch(() => {
+      document.body.innerText = '';
+    });
+  </script></body>
+</html>
