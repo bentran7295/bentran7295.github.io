@@ -13,22 +13,21 @@
     </style>
   </head>
   <body><script type="module">
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js';
-    import { getFirestore, collection, query, where, getDocs, doc, getDoc } from 'https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js';
-
+    // Production Firebase configuration for fastai2609
     const firebaseConfig = {
-      projectId: "gen-lang-client-0306317149",
-      appId: "1:520819513520:web:dd46f7a23ac2f95411c375",
-      apiKey: "AIzaSyDke57AWOc8m1p8hvIXaicgTYqqTsBGO-A",
-      authDomain: "gen-lang-client-0306317149.firebaseapp.com",
-      firestoreDatabaseId: "ai-studio-fastaitemplatehu-c8f56d8b-934b-4553-aa2c-437b59532ee5"
+      apiKey: "AIzaSyC1g2LX72MkVJ9l9RZ_Yiosx-7kMFd9DK4",
+      authDomain: "fastai2609.firebaseapp.com",
+      projectId: "fastai2609",
+      storageBucket: "fastai2609.firebasestorage.app",
+      messagingSenderId: "446866267447",
+      appId: "1:446866267447:web:d8bd9fe79806bb80b34eb2",
+      measurementId: "G-R06EZK0J66"
     };
-
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 
     function parseExpiry(val) {
       if (!val) return null;
+
+      // 1. String formats (yyyyMMdd, yyyy-MM-dd, ISO)
       if (typeof val === 'string') {
         const clean = val.trim();
         const compact = clean.match(/^(\d{4})(\d{2})(\d{2})$/);
@@ -46,12 +45,15 @@
         }
       }
 
+      // 2. Objects (Timestamp { seconds, nanoseconds } or Date)
       let millis = null;
       if (typeof val === 'object' && val !== null) {
         if (typeof val.toDate === 'function') {
           millis = val.toDate().getTime();
         } else if (typeof val.seconds === 'number') {
           millis = val.seconds * 1000;
+        } else if (typeof val.seconds === 'string') {
+          millis = parseInt(val.seconds, 10) * 1000;
         }
       } else if (typeof val === 'number') {
         millis = val < 10000000000 ? val * 1000 : val;
@@ -67,6 +69,104 @@
       return null;
     }
 
+    // Helper to extract fields from Firestore REST API documents
+    function extractRestFields(fields) {
+      if (!fields) return {};
+      const res = {};
+      for (const key in fields) {
+        const valObj = fields[key];
+        if (valObj.stringValue !== undefined) {
+          res[key] = valObj.stringValue;
+        } else if (valObj.integerValue !== undefined) {
+          res[key] = parseInt(valObj.integerValue, 10);
+        } else if (valObj.booleanValue !== undefined) {
+          res[key] = valObj.booleanValue;
+        } else if (valObj.timestampValue !== undefined) {
+          res[key] = valObj.timestampValue;
+        } else if (valObj.mapValue !== undefined) {
+          res[key] = extractRestFields(valObj.mapValue.fields);
+        }
+      }
+      return res;
+    }
+
+    async function checkLicenseViaRest(pid, ma) {
+      const expiries = [];
+      const cleanMa = ma.toLowerCase();
+
+      // Check projects/{pid}/licenses
+      try {
+        const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/projects/${encodeURIComponent(pid)}/licenses`;
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const data = await resp.json();
+          const docs = data.documents || [];
+          for (const d of docs) {
+            const fields = extractRestFields(d.fields);
+            const docMachine = (fields.machineId || fields.deviceId || '').toString().trim().toLowerCase();
+            if (docMachine === cleanMa) {
+              const expVal = fields.expiresAt || (fields.signedPayload && fields.signedPayload.expiresAt);
+              const exp = parseExpiry(expVal);
+              if (exp) {
+                expiries.push({ ...exp, isRevoked: fields.status === 'REVOKED' });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('REST error for projects/' + pid + '/licenses:', e);
+      }
+
+      // Check machines/{ma}/projects/{pid}/licenses
+      try {
+        const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/machines/${encodeURIComponent(ma)}/projects/${encodeURIComponent(pid)}/licenses`;
+        const resp = await fetch(url);
+        if (resp.ok) {
+          const data = await resp.json();
+          const docs = data.documents || [];
+          for (const d of docs) {
+            const fields = extractRestFields(d.fields);
+            const expVal = fields.expiresAt || (fields.signedPayload && fields.signedPayload.expiresAt);
+            const exp = parseExpiry(expVal);
+            if (exp) {
+              expiries.push({ ...exp, isRevoked: fields.status === 'REVOKED' });
+            }
+          }
+        }
+      } catch (e) {}
+
+      return expiries;
+    }
+
+    async function checkLicenseViaSdk(pid, ma) {
+      try {
+        const { initializeApp } = await import('https://www.gstatic.com/firebasejs/11.4.0/firebase-app.js');
+        const { getFirestore, collection, getDocs } = await import('https://www.gstatic.com/firebasejs/11.4.0/firebase-firestore.js');
+        
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const cleanMa = ma.toLowerCase();
+        const expiries = [];
+
+        const snapAll = await getDocs(collection(db, `projects/${pid}/licenses`));
+        snapAll.forEach((d) => {
+          const data = d.data();
+          const docMachine = (data.machineId || data.deviceId || '').toString().trim().toLowerCase();
+          if (docMachine === cleanMa) {
+            const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
+            if (exp) {
+              expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
+            }
+          }
+        });
+
+        return expiries;
+      } catch (sdkErr) {
+        console.warn('SDK fallback error:', sdkErr);
+        return [];
+      }
+    }
+
     async function checkLicense() {
       const params = new URLSearchParams(window.location.search);
       const pid = (params.get('pid') || params.get('projectId') || params.get('projectID') || '').trim();
@@ -77,79 +177,15 @@
         return;
       }
 
-      const targetProjectIds = new Set();
-      targetProjectIds.add(pid);
+      // Try fast REST API first (near zero latency, no heavy JS download)
+      let expiries = await checkLicenseViaRest(pid, ma);
 
-      try {
-        const pDoc = await getDoc(doc(db, 'projects', pid));
-        if (pDoc.exists()) {
-          targetProjectIds.add(pDoc.id);
+      // If nothing found or error, fallback to Firebase JS SDK
+      if (expiries.length === 0) {
+        const sdkExpiries = await checkLicenseViaSdk(pid, ma);
+        if (sdkExpiries.length > 0) {
+          expiries = sdkExpiries;
         }
-      } catch (e) {}
-
-      try {
-        const qSlug = query(collection(db, 'projects'), where('slug', '==', pid));
-        const sSnap = await getDocs(qSlug);
-        sSnap.forEach(d => targetProjectIds.add(d.id));
-      } catch (e) {}
-
-      const expiries = [];
-
-      for (const projId of Array.from(targetProjectIds)) {
-        // Master licenses
-        try {
-          const qMachine = query(collection(db, `projects/${projId}/licenses`), where('machineId', '==', ma));
-          const snapMachine = await getDocs(qMachine);
-          snapMachine.forEach(d => {
-            const data = d.data();
-            const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
-            if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
-          });
-
-          const qDevice = query(collection(db, `projects/${projId}/licenses`), where('deviceId', '==', ma));
-          const snapDevice = await getDocs(qDevice);
-          snapDevice.forEach(d => {
-            const data = d.data();
-            const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
-            if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
-          });
-
-          if (snapMachine.empty && snapDevice.empty) {
-            const snapAll = await getDocs(collection(db, `projects/${projId}/licenses`));
-            snapAll.forEach(d => {
-              const data = d.data();
-              const docMachine = (data.machineId || data.deviceId || '').trim().toLowerCase();
-              if (docMachine === ma.toLowerCase()) {
-                const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
-                if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
-              }
-            });
-          }
-        } catch (e) {}
-
-        // Device licenses
-        try {
-          const snapDeviceLic = await getDocs(collection(db, `machines/${ma}/projects/${projId}/licenses`));
-          snapDeviceLic.forEach(d => {
-            const data = d.data();
-            const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
-            if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
-          });
-        } catch (e) {}
-
-        // Legacy licenses
-        try {
-          const qLegacy = query(collection(db, 'licenses'), where('projectId', '==', projId));
-          const snapLegacy = await getDocs(qLegacy);
-          snapLegacy.forEach(d => {
-            const data = d.data();
-            const docMachine = (data.machineId || data.deviceId || '').trim().toLowerCase();
-            if (docMachine === ma.toLowerCase()) {
-              const exp = parseExpiry(data.expiresAt || (data.signedPayload && data.signedPayload.expiresAt));
-              if (exp) expiries.push({ ...exp, isRevoked: data.status === 'REVOKED' });
-            }
-          });
-        } catch (e) {}
       }
 
       if (expiries.length === 0) {
@@ -157,17 +193,21 @@
         return;
       }
 
+      // Filter out revoked licenses if active ones exist
       const active = expiries.filter(f => !f.isRevoked);
       const candidates = active.length > 0 ? active : expiries;
+      
+      // Get maximum expiration timestamp
       candidates.sort((a, b) => b.timestamp - a.timestamp);
 
       const maxDate = candidates[0].yyyyMMdd;
       document.title = maxDate;
-      // Output only yyyyMMdd without any other elements
+      // Output strictly only yyyyMMdd without any HTML elements
       document.body.innerText = maxDate;
     }
 
-    checkLicense().catch(() => {
+    checkLicense().catch((err) => {
+      console.error('License check error:', err);
       document.body.innerText = '';
     });
   </script></body>
