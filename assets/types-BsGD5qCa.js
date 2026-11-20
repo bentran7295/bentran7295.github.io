@@ -1,0 +1,1 @@
+const e=["1month","lifetime"],l=[{key:"1month",label:"1 tháng"},{key:"3months",label:"3 tháng"},{key:"6months",label:"6 tháng"},{key:"1year",label:"1 năm"},{key:"lifetime",label:"Vĩnh viễn"}];export{e as D,l as P};
